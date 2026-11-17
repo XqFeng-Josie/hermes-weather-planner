@@ -81,6 +81,41 @@ class GeocodeTests(unittest.TestCase):
         self.assertEqual(len(out['candidates']), 5)
         self.assertIn('ambiguous', out['error'])
 
+    def test_exact_name_beats_partial_matches(self):
+        geo = {'results': [
+            {'name': 'Seattle', 'admin1': 'Washington', 'country': 'United States', 'country_code': 'US',
+             'latitude': 47.6062, 'longitude': -122.3321, 'timezone': 'America/Los_Angeles'},
+            {'name': 'Seattle Hill', 'admin1': 'Washington', 'country': 'United States', 'country_code': 'US',
+             'latitude': 47.8873, 'longitude': -122.1340, 'timezone': 'America/Los_Angeles'}]}
+        code, out = run(['forecast', '--place', 'Seattle'], FakeFetcher({'geocode': geo}))
+        self.assertEqual(code, 0)
+        self.assertEqual(out['location']['name'], 'Seattle, Washington, United States')
+        code, out = run(['geocode', 'Seattle'], FakeFetcher({'geocode': geo}))
+        self.assertFalse(out['ambiguous'])
+
+    def test_qualified_name_resolves_and_only_city_is_sent(self):
+        fetcher = FakeFetcher()
+        code, out = run(['forecast', '--place', 'Springfield, Illinois'], fetcher)
+        self.assertEqual(code, 0)
+        self.assertEqual(out['location']['name'], 'Springfield, Illinois, United States')
+        self.assertEqual(fetcher.requests[0][2]['name'], 'Springfield')
+        code, out = run(['forecast', '--place', 'Springfield, MA'])
+        self.assertEqual(out['location']['name'], 'Springfield, Massachusetts, United States')
+        code, out = run(['forecast', '--place', 'Springfield, Narnia'])
+        self.assertEqual(code, wp.EXIT_USAGE)
+
+    def test_dominant_match_is_chosen_with_note(self):
+        geo = {'results': [
+            {'name': 'Paris', 'admin1': 'Ile-de-France', 'country': 'France', 'country_code': 'FR',
+             'latitude': 48.85, 'longitude': 2.35, 'timezone': 'Europe/Paris', 'population': 2138551},
+            {'name': 'Paris', 'admin1': 'Texas', 'country': 'United States', 'country_code': 'US',
+             'latitude': 33.66, 'longitude': -95.56, 'timezone': 'America/Chicago', 'population': 24171}]}
+        code, out = run(['forecast', '--place', 'Paris'], FakeFetcher({'geocode': geo}))
+        self.assertEqual(code, 0)
+        self.assertEqual(out['location']['name'], 'Paris, Ile-de-France, France')
+        self.assertIn('Paris, Texas, United States', out['location']['note'])
+        # Springfield (comparable populations in the fixture) stays ambiguous: see above.
+
     def test_first_flag_accepts_top_match(self):
         code, out = run(['forecast', '--place', 'Springfield', '--first'])
         self.assertEqual(code, 0)

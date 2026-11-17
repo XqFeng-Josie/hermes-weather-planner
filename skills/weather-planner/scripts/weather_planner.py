@@ -29,7 +29,7 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 FORECAST_API = 'https://api.open-meteo.com/v1/forecast'
 GEOCODE_API = 'https://geocoding-api.open-meteo.com/v1/search'
 AIR_API = 'https://air-quality-api.open-meteo.com/v1/air-quality'
@@ -174,22 +174,70 @@ def check_coords(lat, lon):
     return round(lat, 4), round(lon, 4)
 
 
+US_STATES = {
+    'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
+    'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia',
+    'HI': 'Hawaii', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa', 'KS': 'Kansas',
+    'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland', 'MA': 'Massachusetts',
+    'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi', 'MO': 'Missouri', 'MT': 'Montana',
+    'NE': 'Nebraska', 'NV': 'Nevada', 'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico',
+    'NY': 'New York', 'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma',
+    'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
+    'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VT': 'Vermont',
+    'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming',
+    'DC': 'District of Columbia'}
+
+
+def _qualifier_matches(q, r):
+    q = q.strip().lower()
+    q_full = US_STATES.get(q.upper(), q).lower()
+    fields = [str(r.get(k) or '').lower() for k in ('admin1', 'admin2', 'country', 'country_code')]
+    return any(f and (f == q or f == q_full or (len(q) > 3 and f.startswith(q))) for f in fields)
+
+
 def geocode(fetcher, name, count=5, country=None):
+    """Candidates for a place. "City, Region[, Country]" qualifiers filter the results locally;
+    only the city part is sent to the geocoder."""
     name = (name or '').strip()
     if not 2 <= len(name) <= 100:
         raise PlannerError('place name must be 2-100 characters')
-    data = fetcher.get('geocode', GEOCODE_API, {'name': name, 'count': max(1, min(count, 10)),
+    city, *qualifiers = [p.strip() for p in name.split(',') if p.strip()] or ['']
+    if country:
+        qualifiers.append(country)
+    data = fetcher.get('geocode', GEOCODE_API, {'name': city, 'count': 10 if qualifiers else max(1, min(count, 10)),
                                                  'language': 'en', 'format': 'json'})
     results = []
     for r in data.get('results') or []:
-        if country and country.upper() not in (str(r.get('country_code', '')).upper(),
-                                                str(r.get('country', '')).upper()):
+        if not all(_qualifier_matches(q, r) for q in qualifiers):
             continue
         label = ', '.join(x for x in (r.get('name'), r.get('admin1'), r.get('country')) if x)
         results.append({'name': r.get('name'), 'label': label, 'latitude': r.get('latitude'),
                         'longitude': r.get('longitude'), 'timezone': r.get('timezone'),
-                        'country_code': r.get('country_code'), 'population': r.get('population')})
-    return results
+                        'country_code': r.get('country_code'), 'population': r.get('population'),
+                        'exact': str(r.get('name', '')).lower() == city.lower()})
+    return results[:max(1, min(count, 10))]
+
+
+DOMINANCE = 10
+
+
+def pick_unambiguous(found):
+    """The single intended place, or None. Exact name matches win over partial ones
+    ("Seattle" vs "Seattle Hill"); a dominant exact match wins with a note."""
+    exact = [c for c in found if c['exact']] or found
+    distinct = {(round(c['latitude'], 1), round(c['longitude'], 1)) for c in exact}
+    if len(distinct) == 1:
+        return exact[0]
+    # Among several exact matches, one >= DOMINANCE x more populous than every other is "the"
+    # place ("Paris" -> France); comparable ones ("Springfield") stay ambiguous.
+    ranked = sorted(exact, key=lambda c: -(c.get('population') or 0))
+    top_pop = ranked[0].get('population') or 0
+    rest_pop = max((c.get('population') or 0) for c in ranked[1:])
+    if top_pop > 0 and top_pop >= DOMINANCE * rest_pop:
+        others = '; '.join(c['label'] for c in ranked[1:5])
+        return dict(ranked[0], note='Assumed the most populous match. Other places with this name: '
+                    + others + '. Mention this if the user might mean another one.')
+    return None
 
 
 def resolve_location(fetcher, args):
@@ -197,14 +245,17 @@ def resolve_location(fetcher, args):
         found = geocode(fetcher, args.place, count=5, country=getattr(args, 'country', None))
         if not found:
             raise PlannerError(f'No place found for "{args.place}"')
-        distinct = {(round(c['latitude'], 1), round(c['longitude'], 1)) for c in found}
-        if len(distinct) > 1 and not getattr(args, 'first', False):
-            raise PlannerError(f'"{args.place}" is ambiguous; ask the user which one they mean, then '
-                               'pass --lat/--lon (or --country, or --first)', EXIT_AMBIGUOUS,
-                               {'candidates': found})
-        c = found[0]
+        c = found[0] if getattr(args, 'first', False) else pick_unambiguous(found)
+        if c is None:
+            raise PlannerError(f'"{args.place}" is ambiguous. Do not guess: show these candidates to the '
+                               'user, ask which one they mean, then call again with --lat/--lon or a '
+                               'qualified name such as "City, State"', EXIT_AMBIGUOUS,
+                               {'candidates': [{k: v for k, v in x.items() if k != 'exact'} for x in found]})
         lat, lon = check_coords(c['latitude'], c['longitude'])
-        return {'name': c['label'], 'latitude': lat, 'longitude': lon}
+        loc = {'name': c['label'], 'latitude': lat, 'longitude': lon}
+        if c.get('note'):
+            loc['note'] = c['note']
+        return loc
     lat, lon = check_coords(args.lat, args.lon)
     return {'name': getattr(args, 'name', None) or f'{lat}, {lon}', 'latitude': lat, 'longitude': lon}
 
@@ -482,7 +533,8 @@ def cmd_geocode(f, a):
     found = geocode(f, a.name, count=a.count, country=a.country)
     summary = (f'{len(found)} match(es) for "{a.name}": ' + '; '.join(c['label'] for c in found)) if found \
         else f'No place found for "{a.name}".'
-    return envelope('geocode', f, candidates=found, ambiguous=len(found) > 1, summary=summary)
+    return envelope('geocode', f, candidates=found, ambiguous=bool(found) and pick_unambiguous(found) is None,
+                    summary=summary)
 
 
 def cmd_forecast(f, a):
@@ -707,7 +759,7 @@ def build_parser():
     common.add_argument('--retries', type=int, default=2)
     common.add_argument('--timeout', type=float, default=10.0)
     where = argparse.ArgumentParser(add_help=False)
-    where.add_argument('--place', help='place name to geocode (ambiguous names exit 3 with candidates)')
+    where.add_argument('--place', help='place name, optionally "City, State/Country" (ambiguous names exit 3)')
     where.add_argument('--country', help='country code/name filter for --place')
     where.add_argument('--first', action='store_true', help='accept the first --place match')
     where.add_argument('--lat', type=float)

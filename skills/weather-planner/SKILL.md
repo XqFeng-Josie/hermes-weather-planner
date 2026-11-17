@@ -1,7 +1,7 @@
 ---
 name: weather-planner
 description: Decision-oriented weather for planning. Finds the best time windows for an activity (run, walk, bike, commute, picnic, outdoor meeting) by scoring rain, feels-like temperature, wind, UV and air quality; gives per-event weather advice for a list of calendar events without sending event titles anywhere; plus geocoding with ambiguity handling, multi-day forecasts and air quality. Uses Open-Meteo (no API key). Not for emergency or severe-weather warnings.
-version: 1.0.0
+version: 1.1.0
 author: XqFeng-Josie
 license: MIT
 metadata:
@@ -33,13 +33,13 @@ Run with Python 3.9+; every command prints JSON (add `--format text` for a one-p
 ```bash
 P="${HERMES_SKILL_DIR}/scripts/weather_planner.py"
 python3 "$P" geocode "Springfield"                                   # candidates + timezone
-python3 "$P" forecast --place "Los Angeles" --first --days 3          # current + daily
+python3 "$P" forecast --place "Los Angeles, CA" --days 3              # current + daily
 python3 "$P" forecast --lat 47.61 --lon -122.33 --hourly --units imperial
-python3 "$P" plan --place "Seattle" --country US --first --activity run          # today (or tomorrow if nothing is left today)
+python3 "$P" plan --place "Seattle, Washington" --activity run        # today (or tomorrow if nothing is left today)
 python3 "$P" plan --lat 34.05 --lon -118.24 --activity picnic --date 2026-11-21 --duration 2 --from 10:00 --to 18:00
 echo '[{"label":"Team lunch","start":"2026-11-21T12:00","end":"2026-11-21T13:30","outdoor":true}]' \
   | python3 "$P" events --lat 34.05 --lon -118.24
-python3 "$P" airquality --place "Delhi" --first --days 2
+python3 "$P" airquality --place "Delhi, India" --days 2
 ```
 
 Activities: `run`, `walk`, `bike`, `commute`, `picnic`, `outdoor-meeting`. Except for `commute`,
@@ -47,10 +47,14 @@ hours outside daylight are excluded.
 
 ## Procedure
 
-1. **Location.** Use the place the user named or their known home city. Run `geocode` or pass
-   `--place`. **Exit code 3 means the name is ambiguous.** Show the user the `candidates` and ask
-   which one they mean, then call again with `--lat/--lon` (or `--country`). Use `--first` only when
-   the user's wording already identifies the place (e.g. "Los Angeles, California").
+1. **Location.** Use the place the user named or their known home city, passed as
+   `--place "City"` or, better, `--place "City, State/Region/Country"` (e.g. "Springfield, IL",
+   "Paris, France"). Only the city part is sent to the geocoder; the qualifiers filter locally.
+   - **Exit code 3 means the name is ambiguous. Do not guess and do not add `--first`.** Show the
+     user the `candidates` and ask which one they mean. Then call again with the qualified name or
+     `--lat/--lon`.
+   - If `location.note` is present, the tool picked a much larger place with the same name (e.g.
+     "Paris" → France). Mention the alternatives briefly.
 2. **Pick the command.** Use `plan` for "when should I…", `events` for calendar items, and
    `forecast` for general conditions. Use `airquality` when the user asks, or for sensitive users.
 3. **Events.** Pass events as JSON on stdin: `start` (ISO 8601, with an offset or in the location's
@@ -90,5 +94,5 @@ hours outside daylight are excluded.
 - Offline self-check (no network):
   `python3 "$P" plan --lat 34.05 --lon -118.24 --activity run --date 2026-11-17 --fixture "${HERMES_SKILL_DIR}/fixtures" --format text`
   The output must end with `(synthetic fixture data)`.
-- Live: `python3 "$P" forecast --place "Los Angeles" --first --format text` prints today's
+- Live: `python3 "$P" forecast --place "Los Angeles, CA" --format text` prints today's
   conditions.

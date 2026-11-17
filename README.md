@@ -10,8 +10,10 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) skill tap with on
 - **`events`**: advice per calendar event (umbrella, jacket, heat, wind, UV, air quality, move
   indoors). **Event titles never leave your machine**; only coordinates and dates are sent to the
   weather provider.
-- **`geocode`**: place name → coordinates. Ambiguous names ("Springfield") return the candidates
-  with exit code 3 instead of a guess.
+- **`geocode`**: place name → coordinates. It accepts "City, State/Country" ("Springfield, IL").
+  Exact names beat partial matches ("Seattle" vs "Seattle Hill"), and a place at least 10× more
+  populous than its namesakes is chosen with a note ("Paris" → France). Genuinely ambiguous names
+  ("Springfield") return the candidates with exit code 3 instead of a guess.
 - **`forecast`**: current conditions and up to 7 days, with optional hourly data, in °C/km/h or
   °F/mph.
 - **`airquality`**: daily maximum US AQI, PM2.5 and category.
@@ -40,7 +42,7 @@ Then ask your agent, for example:
 
 ```bash
 P=skills/weather-planner/scripts/weather_planner.py
-python3 $P plan --place "Seattle" --country US --first --activity run --format text
+python3 $P plan --place "Seattle, WA" --activity run --format text
 # No suitable time left today (2026-11-16); planning tomorrow. Best time for run on 2026-11-17: 12:00–13:00 (great, score 98). Avoid 07:00–08:00 (cold (feels 1°C)).
 python3 $P forecast --place "Springfield"        # exit 3 + candidates (ambiguous)
 echo '[{"label":"Team lunch","start":"2026-11-21T12:00","end":"2026-11-21T13:30","outdoor":true}]' \
@@ -72,7 +74,7 @@ fair (≥ 40) and poor. The comfort profiles are in `PROFILES` in the script.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 35 offline tests, no network
+python3 -m unittest discover -s tests -v   # 38 offline tests, no network
 ```
 
 The fixtures in `skills/weather-planner/fixtures/` are real Open-Meteo responses recorded on
