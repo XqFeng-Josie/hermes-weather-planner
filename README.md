@@ -76,7 +76,7 @@ python3 -m unittest discover -s tests -v   # 35 offline tests, no network
 ```
 
 The fixtures in `skills/weather-planner/fixtures/` are real Open-Meteo responses recorded on
-2026-11-16 for Los Angeles and "Springfield". CI runs the tests on Python 3.9, 3.12 and 3.13.
+2026-11-16 for Los Angeles and "Springfield". CI runs the tests on Python 3.10, 3.12 and 3.13; they were also run locally on 3.9 and 3.14.
 
 ## Data and license
 
